@@ -245,6 +245,17 @@ def fetch_alerts() -> list:
     except:
         return []
 
+@st.cache_data(ttl=15)
+def fetch_model_stats() -> list:
+    """Fetch per-model token stats from /v1/model-stats (our independent tracker)."""
+    try:
+        r = httpx.get(f"{GATEWAY_URL}/v1/model-stats", headers=HEADERS, timeout=10)
+        if r.status_code == 200:
+            return r.json().get("models", [])
+        return []
+    except:
+        return []
+
 def auto_refresh(seconds: int = 30):
     st.markdown(
         f"<script>setTimeout(()=>window.location.reload(),{seconds*1000});</script>",
@@ -274,6 +285,7 @@ with st.sidebar:
 
     page = st.radio("", [
         "Overview",
+        "Observability",
         "Model Analytics",
         "Usage Trends",
         "Alerts",
@@ -429,7 +441,160 @@ if page == "Overview":
 
 
 # ─────────────────────────────────────────────
-# PAGE 2 — MODEL ANALYTICS
+# PAGE 2 — OBSERVABILITY
+# ─────────────────────────────────────────────
+elif page == "Observability":
+    from datetime import timezone as _tz
+    st.markdown("## Token Usage Observability")
+    st.caption(
+        f"Independent tracking — every LLM call recorded in Turso  |  "
+        f"Updated: {datetime.now().strftime('%I:%M:%S %p IST')}"
+    )
+
+    stats = fetch_model_stats()
+    quota = fetch_quota()
+
+    if not stats:
+        st.info(
+            "No model usage recorded yet. Make a few LLM calls through the gateway "
+            "— data will appear here automatically."
+        )
+    else:
+        # ── Summary KPIs ──────────────────────────────────────────────────
+        total_today    = sum(s["today"]["total_tokens"]   for s in stats)
+        total_alltime  = sum(s["all_time"]["total_tokens"] for s in stats)
+        total_req_day  = sum(s["today"]["requests"]        for s in stats)
+        total_req_all  = sum(s["all_time"]["requests"]     for s in stats)
+        active_models  = sum(1 for s in stats if s["today"]["requests"] > 0)
+        this_min_reqs  = sum(s.get("this_minute_requests", 0) for s in stats)
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Tokens Today",      f"{total_today:,}")
+        k2.metric("Requests Today",    f"{total_req_day:,}")
+        k3.metric("Active Models",     f"{active_models}")
+        k4.metric("All-Time Tokens",   f"{total_alltime:,}")
+        k5.metric("This Minute Reqs",  f"{this_min_reqs}")
+
+        st.divider()
+
+        # ── Per-Model table ───────────────────────────────────────────────
+        st.markdown("#### Per-Model Breakdown")
+
+        # Build quota lookup for 'remaining' (provider limits)
+        quota_by_model = quota.get("model_usage", {})
+
+        rows = []
+        for s in stats:
+            model_id  = s["model_id"]
+            provider  = s.get("provider", "")
+            t_today   = s["today"]["total_tokens"]
+            r_today   = s["today"]["requests"]
+            t_alltime = s["all_time"]["total_tokens"]
+            r_alltime = s["all_time"]["requests"]
+            this_min  = s.get("this_minute_requests", 0)
+
+            # Try to find quota limit from provider data
+            q = quota_by_model.get(model_id, {})
+            tok_limit     = q.get("tokens", {}).get("limit", 0)     if q else 0
+            tok_remaining = q.get("tokens", {}).get("remaining", 0) if q else 0
+
+            rows.append({
+                "Model":           model_id,
+                "Provider":        provider.upper(),
+                "Used Today":      t_today,
+                "Requests Today":  r_today,
+                "Remaining (quota)": tok_remaining if tok_remaining else "-",
+                "All-Time Tokens": t_alltime,
+                "All-Time Reqs":   r_alltime,
+                "This Min Reqs":   this_min,
+            })
+
+        df = pd.DataFrame(rows)
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Used Today":        st.column_config.NumberColumn(format="%d"),
+                "All-Time Tokens":   st.column_config.NumberColumn(format="%d"),
+                "Requests Today":    st.column_config.NumberColumn(format="%d"),
+                "All-Time Reqs":     st.column_config.NumberColumn(format="%d"),
+                "This Min Reqs":     st.column_config.NumberColumn(format="%d"),
+            },
+        )
+
+        st.divider()
+
+        # ── Token usage bar chart — Today ─────────────────────────────────
+        st.markdown("#### Tokens Used Today — By Model")
+        chart_data = [s for s in stats if s["today"]["total_tokens"] > 0]
+        if chart_data:
+            chart_data.sort(key=lambda x: x["today"]["total_tokens"], reverse=True)
+            fig_today = go.Figure(go.Bar(
+                x=[s["model_id"] for s in chart_data],
+                y=[s["today"]["total_tokens"] for s in chart_data],
+                marker_color="#FF6B00",
+                text=[f"{s['today']['total_tokens']:,}" for s in chart_data],
+                textposition="outside",
+            ))
+            fig_today.update_layout(
+                paper_bgcolor="#0A0A0A",
+                plot_bgcolor="#0A0A0A",
+                font=dict(color="#CCC", size=11),
+                xaxis=dict(tickangle=-35, gridcolor="#1A1A1A"),
+                yaxis=dict(gridcolor="#1A1A1A", title="Tokens"),
+                margin=dict(t=20, b=80, l=60, r=20),
+                height=320,
+            )
+            st.plotly_chart(fig_today, use_container_width=True)
+        else:
+            st.caption("No token usage recorded today yet.")
+
+        st.divider()
+
+        # ── All-Time totals bar chart ──────────────────────────────────────
+        st.markdown("#### All-Time Token Usage — Since Day One")
+        alltime_data = sorted(stats, key=lambda x: x["all_time"]["total_tokens"], reverse=True)
+        fig_all = go.Figure(go.Bar(
+            x=[s["model_id"] for s in alltime_data],
+            y=[s["all_time"]["total_tokens"] for s in alltime_data],
+            marker_color="#FF8C00",
+            text=[f"{s['all_time']['total_tokens']:,}" for s in alltime_data],
+            textposition="outside",
+        ))
+        fig_all.update_layout(
+            paper_bgcolor="#0A0A0A",
+            plot_bgcolor="#0A0A0A",
+            font=dict(color="#CCC", size=11),
+            xaxis=dict(tickangle=-35, gridcolor="#1A1A1A"),
+            yaxis=dict(gridcolor="#1A1A1A", title="Tokens"),
+            margin=dict(t=20, b=80, l=60, r=20),
+            height=320,
+        )
+        st.plotly_chart(fig_all, use_container_width=True)
+
+        st.divider()
+
+        # ── Per-minute rate indicator ─────────────────────────────────────
+        st.markdown("#### Per-Minute Rate — This Minute")
+        active_now = [(s["model_id"], s.get("this_minute_requests", 0))
+                      for s in stats if s.get("this_minute_requests", 0) > 0]
+        if active_now:
+            for model_id, count in sorted(active_now, key=lambda x: -x[1]):
+                st.markdown(
+                    f"<div style='background:#141414; border:1px solid #2A2A2A; border-left:3px solid #FF6B00;"
+                    f"border-radius:6px; padding:10px 16px; margin:4px 0; display:flex; justify-content:space-between;'>"
+                    f"<span style='color:#CCC; font-size:0.85rem;'>{model_id}</span>"
+                    f"<span style='color:#FF6B00; font-weight:700; font-size:0.85rem;'>{count} req/min</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("No requests in the current minute — system idle.")
+
+
+# ─────────────────────────────────────────────
+# PAGE 3 — MODEL ANALYTICS
 # ─────────────────────────────────────────────
 elif page == "Model Analytics":
     st.markdown("## Model Analytics")
