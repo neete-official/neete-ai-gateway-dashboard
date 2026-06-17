@@ -185,6 +185,20 @@ st.markdown("""
 /* ── Divider ── */
 hr { border: none !important; border-top: 1px solid #161616 !important; margin: 20px 0 !important; }
 
+/* ── Hide Streamlit sidebar collapse icon text leak ── */
+[data-testid="collapsedControl"] { display: none !important; }
+button[kind="headerNoPadding"] { display: none !important; }
+.st-emotion-cache-czk5ss { display: none !important; }
+section[data-testid="stSidebarCollapsedControl"] { display: none !important; }
+/* Hide the keyboard_double_arrow icon name that leaks as text */
+[data-testid="stSidebarCollapseButton"] { display: none !important; }
+[data-testid="stSidebarUserContent"] > div:first-child button { display: none !important; }
+/* Hide Streamlit top toolbar icons that show as text */
+.st-emotion-cache-1avcm0n { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
+#MainMenu { display: none !important; }
+header[data-testid="stHeader"] { display: none !important; }
+
 /* ── Buttons ── */
 .stButton > button {
     background: #FF6B00 !important;
