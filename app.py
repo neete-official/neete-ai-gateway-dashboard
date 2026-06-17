@@ -744,103 +744,233 @@ elif page == "Alerts":
 # ─────────────────────────────────────────────
 elif page == "Test LLM":
     st.markdown("## Live LLM Test Console")
-    st.caption("Test any model through the gateway in real-time")
+    st.caption("Test any model through the Neete AI Gateway in real-time")
 
-    models = fetch_models()
+    # ── Model config row ──────────────────────────────────────────
+    all_models = fetch_models()
 
-    # Provider filter for Test LLM
-    test_provider = st.radio(
-        "Provider", ["Groq (Recommended)", "NVIDIA NIM"],
-        horizontal=True,
-        help="Groq models are stable. NIM models may return 404 if not available."
-    )
+    # Build provider → canonical_name list from live DB
+    groq_models = sorted([
+        m["canonical_name"] for m in all_models
+        if any(p.get("provider", "").lower() == "groq"
+               for p in m.get("providers", []))
+    ])
+    nim_models = sorted([
+        m["canonical_name"] for m in all_models
+        if any(p.get("provider", "").lower() in ("nim", "nvidia", "nvidia nim")
+               for p in m.get("providers", []))
+    ])
 
-    use_groq = "Groq" in test_provider
+    # Fallback if gateway unreachable — known working models
+    if not groq_models:
+        groq_models = ["llama-3.1-8b", "llama-3.3-70b", "llama-4-scout", "allam-2-7b"]
+    if not nim_models:
+        nim_models = [
+            "nemotron-mini-4b-instruct", "gemma-3n-e4b-it", "gemma-2-2b-it",
+            "llama-4-maverick-17b-128e-instruct", "mixtral-8x7b-instruct-v0.1",
+            "llama-3.2-1b-instruct", "llama-3.2-3b-instruct", "nemotron-super",
+        ]
 
-    # Use verified working models from test report
-    WORKING_GROQ = ["llama-3.1-8b", "llama-3.3-70b", "llama-4-scout", "allam-2-7b"]
-    WORKING_NIM  = [
-        "nemotron-mini-4b-instruct", "mistral-large-3-675b-instruct-2512",
-        "gemma-3n-e4b-it", "gemma-3n-e2b-it", "gemma-2-2b-it",
-        "llama-4-maverick-17b-128e-instruct", "glm-5.1",
-        "mixtral-8x7b-instruct-v0.1", "dracarys-llama-3.1-70b-instruct",
-        "llama-3.2-1b-instruct", "llama-3.2-3b-instruct",
-        "llama-3.2-90b-vision-instruct", "llama-3.1-nemotron",
-        "nemotron-super", "nemotron-3-super-120b-a12b",
-        "kimi-k2.6", "llama-3.1-nemotron-nano-vl-8b-v1",
-        "llama-3.2-vision", "llama-guard-4-12b",
-    ]
+    cfg1, cfg2, cfg3, cfg4 = st.columns([2, 3, 1, 1])
 
-    model_ids = WORKING_GROQ if use_groq else WORKING_NIM
+    with cfg1:
+        provider_choice = st.selectbox(
+            "Provider",
+            ["Groq", "NVIDIA NIM"],
+            help="Groq: stable, fast. NIM: larger models, may vary."
+        )
 
-    if not model_ids:
-        st.error("No models available. Gateway may be unreachable.")
-        st.stop()
+    model_pool = groq_models if provider_choice == "Groq" else nim_models
 
-    st.caption(f"{len(model_ids)} chat-capable models available")
+    with cfg2:
+        selected_model = st.selectbox(
+            f"Model  ({len(model_pool)} available from gateway)",
+            options=model_pool,
+        )
 
-    col1, col2, col3 = st.columns([3, 1, 1])
-    with col1:
-        selected_model = st.selectbox("Model", options=model_ids)
-    with col2:
-        temperature = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1)
-    with col3:
+    with cfg3:
+        temperature = st.slider("Temp", 0.0, 2.0, 0.7, 0.1)
+
+    with cfg4:
         max_tokens = st.number_input("Max Tokens", 64, 4096, 512)
 
     system_prompt = st.text_input(
-        "System Prompt",
-        placeholder="Optional — e.g. You are a manufacturing assistant for Funcool.",
+        "System Prompt (optional)",
+        placeholder="e.g. You are a manufacturing assistant for Funcool.",
     )
-    user_input = st.text_area("Message", placeholder="Enter your message...", height=100)
 
-    if st.button("Send Request", use_container_width=True):
+    st.divider()
+
+    # ── Session state: conversation history ───────────────────────
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []   # list of {role, content, meta}
+    if "chat_model" not in st.session_state:
+        st.session_state.chat_model = selected_model
+
+    # Reset conversation when model changes
+    if st.session_state.chat_model != selected_model:
+        st.session_state.chat_history = []
+        st.session_state.chat_model = selected_model
+
+    # ── Conversation history display ──────────────────────────────
+    history_container = st.container()
+
+    with history_container:
+        if not st.session_state.chat_history:
+            st.markdown(
+                "<div style='text-align:center; color:#555; padding:40px 0;'>"
+                "No messages yet — start a conversation below."
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            for turn in st.session_state.chat_history:
+                role = turn["role"]
+                content = turn["content"]
+                meta = turn.get("meta", {})
+
+                if role == "user":
+                    st.markdown(f"""
+                    <div style='background:#1A1A1A; border:1px solid #333; border-left:3px solid #666;
+                                border-radius:8px; padding:14px 18px; margin:8px 0; color:#CCC;
+                                font-size:0.88rem; line-height:1.6;'>
+                        <div style='color:#888; font-size:0.72rem; text-transform:uppercase;
+                                    letter-spacing:0.06em; margin-bottom:8px;'>You</div>
+                        {content}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                elif role == "assistant":
+                    meta_line = ""
+                    if meta:
+                        meta_line = (
+                            f"<div style='color:#555; font-size:0.7rem; margin-top:10px;'>"
+                            f"Model: {meta.get('model', selected_model)}  |  "
+                            f"Provider: {meta.get('provider', '')}  |  "
+                            f"Latency: {meta.get('latency_ms', 0):.0f}ms  |  "
+                            f"Tokens: {meta.get('total_tokens', 0)}"
+                            f"</div>"
+                        )
+                    st.markdown(f"""
+                    <div style='background:#141414; border:1px solid #2A2A2A; border-left:3px solid #FF6B00;
+                                border-radius:8px; padding:14px 18px; margin:8px 0; color:#DDD;
+                                font-size:0.88rem; line-height:1.6;'>
+                        <div style='color:#FF6B00; font-size:0.72rem; text-transform:uppercase;
+                                    letter-spacing:0.06em; margin-bottom:8px;'>Gateway Response</div>
+                        <div style='white-space:pre-wrap;'>{content}</div>
+                        {meta_line}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+    # ── Input + action buttons ────────────────────────────────────
+    st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+
+    user_input = st.text_area(
+        "Your Message",
+        placeholder="Enter your message and click Send...",
+        height=90,
+        key="user_input_box",
+        label_visibility="collapsed",
+    )
+
+    btn1, btn2, btn3 = st.columns([3, 1, 1])
+
+    with btn1:
+        send_clicked = st.button("Send", use_container_width=True)
+
+    with btn2:
+        if st.button("Clear Chat", use_container_width=True):
+            st.session_state.chat_history = []
+            st.rerun()
+
+    with btn3:
+        # Show cumulative token usage for this session
+        session_tokens = sum(
+            t.get("meta", {}).get("total_tokens", 0)
+            for t in st.session_state.chat_history
+            if t["role"] == "assistant"
+        )
+        st.markdown(
+            f"<div style='text-align:center; padding:6px; color:#888; font-size:0.78rem;'>"
+            f"Session Tokens<br><span style='color:#FF6B00; font-weight:700;'>{session_tokens:,}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Send logic ────────────────────────────────────────────────
+    if send_clicked:
         if not user_input.strip():
             st.warning("Please enter a message.")
         else:
-            with st.spinner(f"Requesting {selected_model}..."):
-                messages = []
-                if system_prompt.strip():
-                    messages.append({"role": "system", "content": system_prompt})
-                messages.append({"role": "user", "content": user_input})
+            # Build messages: system prompt + full conversation history + new user message
+            messages = []
+            if system_prompt.strip():
+                messages.append({"role": "system", "content": system_prompt.strip()})
+            for turn in st.session_state.chat_history:
+                messages.append({"role": turn["role"], "content": turn["content"]})
+            messages.append({"role": "user", "content": user_input.strip()})
 
+            # Save user turn immediately
+            st.session_state.chat_history.append({
+                "role": "user",
+                "content": user_input.strip(),
+                "meta": {},
+            })
+
+            with st.spinner(f"Waiting for {selected_model}..."):
                 t0 = time.perf_counter()
                 try:
                     resp = httpx.post(
                         f"{GATEWAY_URL}/v1/chat",
-                        json={"model": selected_model, "messages": messages,
-                              "temperature": temperature, "max_tokens": max_tokens},
+                        json={
+                            "model":       selected_model,
+                            "messages":    messages,
+                            "temperature": temperature,
+                            "max_tokens":  int(max_tokens),
+                        },
                         headers=HEADERS,
                         timeout=60,
                     )
                     latency = (time.perf_counter() - t0) * 1000
 
                     if resp.status_code == 200:
-                        data  = resp.json()
-
-                        # Gateway returns custom format: {content, usage, model, provider, latency_ms}
-                        # NOT OpenAI choices[] format
+                        data    = resp.json()
                         content = data.get("content") or ""
                         usage   = data.get("usage", {})
 
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Latency",           f"{data.get('latency_ms', latency):.0f} ms")
-                        m2.metric("Prompt Tokens",     usage.get("prompt_tokens", 0))
-                        m3.metric("Completion Tokens", usage.get("completion_tokens", 0))
-                        m4.metric("Total Tokens",      usage.get("total_tokens", 0))
+                        meta = {
+                            "model":             data.get("model", selected_model),
+                            "provider":          data.get("provider", provider_choice),
+                            "latency_ms":        data.get("latency_ms", latency),
+                            "prompt_tokens":     usage.get("prompt_tokens", 0),
+                            "completion_tokens": usage.get("completion_tokens", 0),
+                            "total_tokens":      usage.get("total_tokens", 0),
+                        }
 
-                        st.divider()
-                        st.markdown("**Response**")
-                        st.markdown(f"""
-                        <div style='background:#141414; border:1px solid #2A2A2A; border-left:3px solid #FF6B00;
-                                    border-radius:8px; padding:20px; color:#DDD;
-                                    font-size:0.9rem; line-height:1.7; white-space:pre-wrap;'>{content}</div>
-                        """, unsafe_allow_html=True)
-                        st.caption(
-                            f"Model: {data.get('model', selected_model)}  |  "
-                            f"Provider: {data.get('provider','')}  |  "
-                            f"Latency: {data.get('latency_ms', latency):.0f}ms"
-                        )
+                        # Save assistant turn
+                        st.session_state.chat_history.append({
+                            "role":    "assistant",
+                            "content": content,
+                            "meta":    meta,
+                        })
+
+                        st.rerun()
+
                     else:
-                        st.error(f"Error {resp.status_code}: {resp.text}")
+                        # Remove the user turn we already saved since it failed
+                        st.session_state.chat_history.pop()
+                        try:
+                            err_body = resp.json()
+                            err_msg  = err_body.get("detail", resp.text)
+                            if isinstance(err_msg, dict):
+                                err_msg = err_msg.get("message", str(err_msg))
+                        except Exception:
+                            err_msg = resp.text
+                        st.error(f"Error {resp.status_code}: {err_msg}")
+
+                except httpx.TimeoutException:
+                    st.session_state.chat_history.pop()
+                    st.error(f"Request timed out after 60s. Model {selected_model} may be overloaded — try Groq models for fastest response.")
                 except Exception as e:
+                    st.session_state.chat_history.pop()
                     st.error(f"Request failed: {e}")
