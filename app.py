@@ -284,8 +284,7 @@ with st.sidebar:
     st.divider()
 
     page = st.radio("", [
-        "Overview",
-        "Observability",
+        "Dashboard",
         "Model Analytics",
         "Usage Trends",
         "Alerts",
@@ -309,288 +308,299 @@ with st.sidebar:
 
 
 # ─────────────────────────────────────────────
-# PAGE 1 — OVERVIEW
+# PAGE 1 — DASHBOARD (Langfuse-style unified)
 # ─────────────────────────────────────────────
-if page == "Overview":
-    st.markdown("## Gateway Overview")
-    st.caption(f"Last updated: {datetime.now().strftime('%I:%M:%S %p IST')}")
-
+if page == "Dashboard":
+    # ── Fetch all data ────────────────────────────────────────────
     models = fetch_models()
     quota  = fetch_quota()
     keys   = fetch_keys()
     alerts = fetch_alerts()
+    stats  = fetch_model_stats()   # independent per-model tracker
 
-    # KPI Row
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("Total Models", len(models))
-    with c2:
-        st.metric("Requests Today", f"{quota.get('requests_today', 0):,}")
-    with c3:
-        st.metric("Tokens Used", f"{quota.get('tokens_today', 0):,}")
-    with c4:
-        st.metric("Active Keys", len(keys))
-    with c5:
-        alert_count = len(alerts)
-        st.metric("Active Alerts", alert_count)
+    is_live = fetch_health()
+
+    # ── Derived values ────────────────────────────────────────────
+    tok_today    = sum(s["today"]["total_tokens"]    for s in stats) if stats else quota.get("tokens_today", 0)
+    req_today    = sum(s["today"]["requests"]        for s in stats) if stats else quota.get("requests_today", 0)
+    tok_alltime  = sum(s["all_time"]["total_tokens"] for s in stats) if stats else 0
+    req_alltime  = sum(s["all_time"]["requests"]     for s in stats) if stats else 0
+    active_now   = sum(s.get("this_minute_requests", 0) for s in stats) if stats else 0
+    active_mdls  = sum(1 for s in stats if s["today"]["requests"] > 0) if stats else 0
+    tok_limit    = quota.get("tokens_limit", 0) or 1
+    tok_pct      = min(100, tok_today / tok_limit * 100) if tok_limit else 0
+
+    groq_models_list = [m for m in models if any(
+        p.get("provider", "").lower() == "groq" for p in m.get("providers", [])
+    )]
+    nim_models_list  = [m for m in models if m not in groq_models_list]
+
+    # ── Header ────────────────────────────────────────────────────
+    hcol1, hcol2 = st.columns([3, 1])
+    with hcol1:
+        st.markdown("## Neete AI Gateway — Dashboard")
+        st.caption(
+            f"Last refreshed: {datetime.now().strftime('%d %b %Y, %I:%M:%S %p IST')}  |  "
+            f"Gateway: {'LIVE' if is_live else 'DOWN'}  |  "
+            f"Groq: {len(groq_models_list)} models  |  NIM: {len(nim_models_list)} models"
+        )
+    with hcol2:
+        st.markdown(
+            f"<div style='text-align:right; padding-top:10px;'>"
+            f"<span class='{'status-live' if is_live else 'status-down'}'>"
+            f"{'● GATEWAY LIVE' if is_live else '● GATEWAY DOWN'}</span></div>",
+            unsafe_allow_html=True,
+        )
 
     st.divider()
 
-    col1, col2 = st.columns(2)
+    # ── KPI Row ───────────────────────────────────────────────────
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Tokens Today",     f"{tok_today:,}")
+    k2.metric("Requests Today",   f"{req_today:,}")
+    k3.metric("Active Models",    f"{active_mdls}")
+    k4.metric("All-Time Tokens",  f"{tok_alltime:,}")
+    k5.metric("All-Time Requests",f"{req_alltime:,}")
+    k6.metric("Req This Minute",  f"{active_now}")
 
-    with col1:
-        st.markdown("#### Provider Distribution")
-        groq_models = [m for m in models if any(
-            x in m.get("canonical_name","").lower()
-            for x in ["llama","mixtral","gemma","whisper"]
-        ) or any(
-            p.get("provider") == "groq"
-            for p in m.get("providers", [])
-        )]
-        nim_models = [m for m in models if m not in groq_models]
+    st.divider()
 
-        fig = go.Figure(data=[go.Pie(
-            labels=["Groq", "NVIDIA NIM"],
-            values=[len(groq_models), len(nim_models)],
-            hole=0.65,
-            marker=dict(colors=["#FF6B00", "#CC4400"], line=dict(color="#0A0A0A", width=2)),
-            textinfo="label+value",
-            textfont=dict(color="white", size=12),
-            hovertemplate="%{label}: %{value} models<extra></extra>",
-        )])
-        fig.update_layout(
-            paper_bgcolor="#141414",
-            plot_bgcolor="#141414",
-            font=dict(color="white"),
-            showlegend=False,
-            margin=dict(t=10, b=10, l=10, r=10),
-            height=260,
-            annotations=[dict(
-                text=f"<b>{len(models)}</b><br><span style='font-size:10px'>Models</span>",
-                x=0.5, y=0.5,
-                font=dict(size=18, color="#FF6B00"),
-                showarrow=False,
-            )]
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # ── Row 1: Quota gauge + Provider pie + Key pool ──────────────
+    r1a, r1b, r1c = st.columns([2, 2, 1])
 
-    with col2:
-        st.markdown("#### Daily Token Quota")
-        DAILY_LIMIT = quota.get("tokens_limit", 500_000) or 500_000
-        used        = quota.get("tokens_today", 0)
-        remaining   = max(0, DAILY_LIMIT - used)
-        pct         = min(100, (used / DAILY_LIMIT) * 100)
-        color     = "#00C853" if pct < 60 else "#FF6B00" if pct < 85 else "#FF3D00"
-
-        fig2 = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=pct,
-            number={"suffix": "%", "font": {"color": color, "size": 36}},
+    with r1a:
+        st.markdown("##### Daily Quota Usage")
+        color_g = "#00C853" if tok_pct < 60 else "#FF6B00" if tok_pct < 85 else "#FF3D00"
+        fig_g = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=tok_pct,
+            number={"suffix": "%", "font": {"color": color_g, "size": 32}},
+            delta={"reference": 85, "increasing": {"color": "#FF3D00"}, "decreasing": {"color": "#00C853"}},
             gauge={
-                "axis": {"range": [0, 100], "tickcolor": "#333", "tickfont": {"color": "#555"}},
-                "bar": {"color": color, "thickness": 0.25},
-                "bgcolor": "#1A1A1A",
-                "bordercolor": "#222",
+                "axis": {"range": [0, 100], "tickfont": {"color": "#555"}},
+                "bar":  {"color": color_g, "thickness": 0.22},
+                "bgcolor": "#1A1A1A", "bordercolor": "#222",
                 "steps": [
-                    {"range": [0, 60],  "color": "#0D1A0D"},
+                    {"range": [0,  60], "color": "#0D1A0D"},
                     {"range": [60, 85], "color": "#1A0D00"},
-                    {"range": [85, 100],"color": "#1A0000"},
+                    {"range": [85,100], "color": "#1A0000"},
                 ],
                 "threshold": {"line": {"color": "#FF3D00", "width": 2}, "thickness": 0.75, "value": 85},
             },
         ))
-        fig2.update_layout(
-            paper_bgcolor="#141414",
-            font=dict(color="white"),
-            height=240,
-            margin=dict(t=20, b=0, l=20, r=20),
+        fig_g.update_layout(
+            paper_bgcolor="#141414", font=dict(color="white"),
+            height=210, margin=dict(t=10, b=0, l=20, r=20),
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig_g, use_container_width=True)
+        ga, gb, gc = st.columns(3)
+        ga.metric("Used",      f"{tok_today:,}")
+        gb.metric("Remaining", f"{max(0, tok_limit - tok_today):,}")
+        gc.metric("Limit",     f"{tok_limit:,}")
 
-        ca, cb = st.columns(2)
-        ca.metric("Used", f"{used:,}")
-        cb.metric("Remaining", f"{remaining:,}")
+    with r1b:
+        st.markdown("##### Provider Split — Models")
+        fig_p = go.Figure(go.Pie(
+            labels=["Groq", "NVIDIA NIM"],
+            values=[len(groq_models_list), len(nim_models_list)],
+            hole=0.62,
+            marker=dict(colors=["#FF6B00", "#E65100"], line=dict(color="#0A0A0A", width=2)),
+            textinfo="label+value",
+            textfont=dict(color="white", size=12),
+            hovertemplate="%{label}: %{value} models<extra></extra>",
+        ))
+        fig_p.update_layout(
+            paper_bgcolor="#141414", font=dict(color="white"),
+            showlegend=False, height=240,
+            margin=dict(t=10, b=10, l=10, r=10),
+            annotations=[dict(
+                text=f"<b>{len(models)}</b><br><span style='font-size:9px'>Models</span>",
+                x=0.5, y=0.5, font=dict(size=20, color="#FF6B00"), showarrow=False,
+            )],
+        )
+        st.plotly_chart(fig_p, use_container_width=True)
+
+    with r1c:
+        st.markdown("##### Key Pool")
+        active_keys    = [k for k in keys if isinstance(k, dict) and not k.get("is_exhausted") and k.get("is_active")]
+        exhausted_keys = [k for k in keys if isinstance(k, dict) and k.get("is_exhausted")]
+        st.markdown(
+            f"<div class='stat-card' style='margin-bottom:8px;'>"
+            f"<p class='stat-label'>Active Keys</p>"
+            f"<p class='stat-value'>{len(active_keys)}</p></div>"
+            f"<div class='stat-card' style='border-left-color:#555;'>"
+            f"<p class='stat-label'>Exhausted</p>"
+            f"<p class='stat-value' style='color:#888;'>{len(exhausted_keys)}</p></div>",
+            unsafe_allow_html=True,
+        )
+        if alerts:
+            st.markdown(
+                f"<div class='stat-card' style='border-left-color:#FF3D00; margin-top:8px;'>"
+                f"<p class='stat-label'>Alerts</p>"
+                f"<p class='stat-value' style='color:#FF3D00;'>{len(alerts)}</p></div>",
+                unsafe_allow_html=True,
+            )
 
     st.divider()
 
-    # Model availability table
-    st.markdown("#### Model Availability")
-    avail_rows = []
-    for m in models:
-        prov_list = m.get("providers", [])
-        provider  = prov_list[0].get("provider", "unknown").upper() if prov_list else "UNKNOWN"
-        avail_rows.append({
-            "Model": m.get("canonical_name", ""),
-            "Display Name": m.get("display_name", ""),
-            "Provider": provider,
-            "Status": m.get("status", "unknown"),
-            "Available Keys": m.get("available_keys", 0),
-            "Context Window": m.get("context_window", 0),
-        })
+    # ── Row 2: Per-model usage table ──────────────────────────────
+    st.markdown("##### Model Usage — Today vs All Time")
 
-    if avail_rows:
-        df_avail = pd.DataFrame(avail_rows)
-        st.dataframe(
-            df_avail,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Context Window": st.column_config.NumberColumn(format="%d tokens"),
-            }
-        )
+    quota_by_model = quota.get("model_usage", {})
 
-
-# ─────────────────────────────────────────────
-# PAGE 2 — OBSERVABILITY
-# ─────────────────────────────────────────────
-elif page == "Observability":
-    from datetime import timezone as _tz
-    st.markdown("## Token Usage Observability")
-    st.caption(
-        f"Independent tracking — every LLM call recorded in Turso  |  "
-        f"Updated: {datetime.now().strftime('%I:%M:%S %p IST')}"
-    )
-
-    stats = fetch_model_stats()
-    quota = fetch_quota()
-
-    if not stats:
-        st.info(
-            "No model usage recorded yet. Make a few LLM calls through the gateway "
-            "— data will appear here automatically."
-        )
-    else:
-        # ── Summary KPIs ──────────────────────────────────────────────────
-        total_today    = sum(s["today"]["total_tokens"]   for s in stats)
-        total_alltime  = sum(s["all_time"]["total_tokens"] for s in stats)
-        total_req_day  = sum(s["today"]["requests"]        for s in stats)
-        total_req_all  = sum(s["all_time"]["requests"]     for s in stats)
-        active_models  = sum(1 for s in stats if s["today"]["requests"] > 0)
-        this_min_reqs  = sum(s.get("this_minute_requests", 0) for s in stats)
-
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Tokens Today",      f"{total_today:,}")
-        k2.metric("Requests Today",    f"{total_req_day:,}")
-        k3.metric("Active Models",     f"{active_models}")
-        k4.metric("All-Time Tokens",   f"{total_alltime:,}")
-        k5.metric("This Minute Reqs",  f"{this_min_reqs}")
-
-        st.divider()
-
-        # ── Per-Model table ───────────────────────────────────────────────
-        st.markdown("#### Per-Model Breakdown")
-
-        # Build quota lookup for 'remaining' (provider limits)
-        quota_by_model = quota.get("model_usage", {})
-
-        rows = []
+    if stats:
+        tbl_rows = []
         for s in stats:
-            model_id  = s["model_id"]
-            provider  = s.get("provider", "")
-            t_today   = s["today"]["total_tokens"]
-            r_today   = s["today"]["requests"]
-            t_alltime = s["all_time"]["total_tokens"]
-            r_alltime = s["all_time"]["requests"]
-            this_min  = s.get("this_minute_requests", 0)
-
-            # Try to find quota limit from provider data
-            q = quota_by_model.get(model_id, {})
-            tok_limit     = q.get("tokens", {}).get("limit", 0)     if q else 0
-            tok_remaining = q.get("tokens", {}).get("remaining", 0) if q else 0
-
-            rows.append({
-                "Model":           model_id,
-                "Provider":        provider.upper(),
-                "Used Today":      t_today,
-                "Requests Today":  r_today,
-                "Remaining (quota)": tok_remaining if tok_remaining else "-",
-                "All-Time Tokens": t_alltime,
-                "All-Time Reqs":   r_alltime,
-                "This Min Reqs":   this_min,
+            mid      = s["model_id"]
+            prov     = s.get("provider", "").upper()
+            t_today  = s["today"]["total_tokens"]
+            r_today  = s["today"]["requests"]
+            t_all    = s["all_time"]["total_tokens"]
+            r_all    = s["all_time"]["requests"]
+            this_min = s.get("this_minute_requests", 0)
+            q        = quota_by_model.get(mid, {})
+            remaining = q.get("tokens", {}).get("remaining", 0) if q else 0
+            tbl_rows.append({
+                "Model":          mid,
+                "Provider":       prov,
+                "Tokens Today":   t_today,
+                "Req Today":      r_today,
+                "Remaining":      remaining or 0,
+                "All-Time Tokens":t_all,
+                "All-Time Req":   r_all,
+                "Req/Min":        this_min,
             })
+        tbl_rows.sort(key=lambda x: -x["Tokens Today"])
 
-        df = pd.DataFrame(rows)
         st.dataframe(
-            df,
+            pd.DataFrame(tbl_rows),
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Used Today":        st.column_config.NumberColumn(format="%d"),
-                "All-Time Tokens":   st.column_config.NumberColumn(format="%d"),
-                "Requests Today":    st.column_config.NumberColumn(format="%d"),
-                "All-Time Reqs":     st.column_config.NumberColumn(format="%d"),
-                "This Min Reqs":     st.column_config.NumberColumn(format="%d"),
+                "Tokens Today":    st.column_config.NumberColumn(format="%d"),
+                "All-Time Tokens": st.column_config.NumberColumn(format="%d"),
+                "Req Today":       st.column_config.NumberColumn(format="%d"),
+                "All-Time Req":    st.column_config.NumberColumn(format="%d"),
+                "Remaining":       st.column_config.NumberColumn(format="%d"),
+                "Req/Min":         st.column_config.NumberColumn(format="%d"),
             },
         )
+    else:
+        # Fallback: show quota-based data from provider
+        raw_quota = quota.get("raw", [])
+        if raw_quota:
+            q_rows = [{
+                "Model":     q["model"],
+                "Provider":  q["provider"].upper(),
+                "Tokens Used": q["tokens"]["used"],
+                "Tokens Remaining": q["tokens"]["remaining"],
+                "Req Used":  q["requests"]["used"],
+                "Req Remaining": q["requests"]["remaining"],
+            } for q in raw_quota]
+            st.dataframe(pd.DataFrame(q_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No usage data yet — make a test call from Test LLM to start tracking.")
 
-        st.divider()
+    st.divider()
 
-        # ── Token usage bar chart — Today ─────────────────────────────────
-        st.markdown("#### Tokens Used Today — By Model")
-        chart_data = [s for s in stats if s["today"]["total_tokens"] > 0]
-        if chart_data:
-            chart_data.sort(key=lambda x: x["today"]["total_tokens"], reverse=True)
-            fig_today = go.Figure(go.Bar(
-                x=[s["model_id"] for s in chart_data],
-                y=[s["today"]["total_tokens"] for s in chart_data],
+    # ── Row 3: Token charts ───────────────────────────────────────
+    ch1, ch2 = st.columns(2)
+
+    with ch1:
+        st.markdown("##### Tokens Used Today — By Model")
+        chart_today = [s for s in stats if s["today"]["total_tokens"] > 0] if stats else []
+        if chart_today:
+            chart_today.sort(key=lambda x: -x["today"]["total_tokens"])
+            fig_td = go.Figure(go.Bar(
+                x=[s["model_id"] for s in chart_today],
+                y=[s["today"]["total_tokens"] for s in chart_today],
                 marker_color="#FF6B00",
-                text=[f"{s['today']['total_tokens']:,}" for s in chart_data],
+                text=[f"{s['today']['total_tokens']:,}" for s in chart_today],
                 textposition="outside",
             ))
-            fig_today.update_layout(
-                paper_bgcolor="#0A0A0A",
-                plot_bgcolor="#0A0A0A",
-                font=dict(color="#CCC", size=11),
-                xaxis=dict(tickangle=-35, gridcolor="#1A1A1A"),
-                yaxis=dict(gridcolor="#1A1A1A", title="Tokens"),
-                margin=dict(t=20, b=80, l=60, r=20),
-                height=320,
+            fig_td.update_layout(
+                paper_bgcolor="#0A0A0A", plot_bgcolor="#0A0A0A",
+                font=dict(color="#CCC", size=10),
+                xaxis=dict(tickangle=-40, gridcolor="#1A1A1A"),
+                yaxis=dict(gridcolor="#1A1A1A"),
+                margin=dict(t=20, b=80, l=50, r=10), height=300,
             )
-            st.plotly_chart(fig_today, use_container_width=True)
+            st.plotly_chart(fig_td, use_container_width=True)
         else:
             st.caption("No token usage recorded today yet.")
 
-        st.divider()
+    with ch2:
+        st.markdown("##### All-Time Token Usage — Since Day One")
+        if stats:
+            chart_all = sorted(stats, key=lambda x: -x["all_time"]["total_tokens"])
+            fig_al = go.Figure(go.Bar(
+                x=[s["model_id"] for s in chart_all],
+                y=[s["all_time"]["total_tokens"] for s in chart_all],
+                marker_color="#E65100",
+                text=[f"{s['all_time']['total_tokens']:,}" for s in chart_all],
+                textposition="outside",
+            ))
+            fig_al.update_layout(
+                paper_bgcolor="#0A0A0A", plot_bgcolor="#0A0A0A",
+                font=dict(color="#CCC", size=10),
+                xaxis=dict(tickangle=-40, gridcolor="#1A1A1A"),
+                yaxis=dict(gridcolor="#1A1A1A"),
+                margin=dict(t=20, b=80, l=50, r=10), height=300,
+            )
+            st.plotly_chart(fig_al, use_container_width=True)
+        else:
+            st.caption("No all-time data yet.")
 
-        # ── All-Time totals bar chart ──────────────────────────────────────
-        st.markdown("#### All-Time Token Usage — Since Day One")
-        alltime_data = sorted(stats, key=lambda x: x["all_time"]["total_tokens"], reverse=True)
-        fig_all = go.Figure(go.Bar(
-            x=[s["model_id"] for s in alltime_data],
-            y=[s["all_time"]["total_tokens"] for s in alltime_data],
-            marker_color="#FF8C00",
-            text=[f"{s['all_time']['total_tokens']:,}" for s in alltime_data],
-            textposition="outside",
-        ))
-        fig_all.update_layout(
-            paper_bgcolor="#0A0A0A",
-            plot_bgcolor="#0A0A0A",
-            font=dict(color="#CCC", size=11),
-            xaxis=dict(tickangle=-35, gridcolor="#1A1A1A"),
-            yaxis=dict(gridcolor="#1A1A1A", title="Tokens"),
-            margin=dict(t=20, b=80, l=60, r=20),
-            height=320,
-        )
-        st.plotly_chart(fig_all, use_container_width=True)
+    st.divider()
 
-        st.divider()
+    # ── Row 4: Live rate + Recent alerts ─────────────────────────
+    live_col, alert_col = st.columns([1, 1])
 
-        # ── Per-minute rate indicator ─────────────────────────────────────
-        st.markdown("#### Per-Minute Rate — This Minute")
-        active_now = [(s["model_id"], s.get("this_minute_requests", 0))
-                      for s in stats if s.get("this_minute_requests", 0) > 0]
-        if active_now:
-            for model_id, count in sorted(active_now, key=lambda x: -x[1]):
+    with live_col:
+        st.markdown("##### Live — Requests This Minute")
+        active_right_now = [(s["model_id"], s.get("this_minute_requests", 0))
+                            for s in stats if s.get("this_minute_requests", 0) > 0] if stats else []
+        if active_right_now:
+            for mid, cnt in sorted(active_right_now, key=lambda x: -x[1]):
                 st.markdown(
-                    f"<div style='background:#141414; border:1px solid #2A2A2A; border-left:3px solid #FF6B00;"
-                    f"border-radius:6px; padding:10px 16px; margin:4px 0; display:flex; justify-content:space-between;'>"
-                    f"<span style='color:#CCC; font-size:0.85rem;'>{model_id}</span>"
-                    f"<span style='color:#FF6B00; font-weight:700; font-size:0.85rem;'>{count} req/min</span>"
+                    f"<div style='background:#141414;border:1px solid #2A2A2A;"
+                    f"border-left:3px solid #FF6B00;border-radius:6px;"
+                    f"padding:9px 14px;margin:4px 0;"
+                    f"display:flex;justify-content:space-between;align-items:center;'>"
+                    f"<span style='color:#CCC;font-size:0.83rem;'>{mid}</span>"
+                    f"<span style='color:#FF6B00;font-weight:700;font-size:0.83rem;'>{cnt} req/min</span>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
         else:
-            st.caption("No requests in the current minute — system idle.")
+            st.markdown(
+                "<div style='color:#555;font-size:0.83rem;padding:20px 0;'>System idle — no requests this minute.</div>",
+                unsafe_allow_html=True,
+            )
+
+    with alert_col:
+        st.markdown("##### Recent Alerts")
+        recent_alerts = alerts[:5] if alerts else []
+        if recent_alerts:
+            for a in recent_alerts:
+                if isinstance(a, dict):
+                    pct    = a.get("alert_pct", 0)
+                    color_a = "#FF3D00" if pct >= 90 else "#FF6B00" if pct >= 75 else "#FFC107"
+                    st.markdown(
+                        f"<div style='background:#141414;border:1px solid #2A2A2A;"
+                        f"border-left:3px solid {color_a};border-radius:6px;"
+                        f"padding:9px 14px;margin:4px 0;'>"
+                        f"<span style='color:{color_a};font-size:0.78rem;font-weight:700;'>{pct}% USED</span>"
+                        f"<span style='color:#777;font-size:0.75rem;margin-left:8px;'>{a.get('model_id','')}</span>"
+                        f"<div style='color:#555;font-size:0.7rem;margin-top:2px;'>{a.get('created_at','')[:16]}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+        else:
+            st.markdown(
+                "<div style='color:#555;font-size:0.83rem;padding:20px 0;'>No alerts fired yet.</div>",
+                unsafe_allow_html=True,
+            )
 
 
 # ─────────────────────────────────────────────
