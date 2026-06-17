@@ -446,7 +446,12 @@ def fetch_quota() -> dict:
 def fetch_keys() -> list:
     try:
         r = httpx.get(f"{GATEWAY_URL}/v1/keys", headers=HEADERS, timeout=10)
-        d = r.json() if r.status_code == 200 else []
+        if r.status_code != 200:
+            return []
+        d = r.json()
+        # /v1/keys returns {"description":..., "keys":[...]} not a plain list
+        if isinstance(d, dict):
+            return d.get("keys", [])
         return d if isinstance(d, list) else []
     except:
         return []
@@ -455,7 +460,12 @@ def fetch_keys() -> list:
 def fetch_alerts() -> list:
     try:
         r = httpx.get(f"{GATEWAY_URL}/v1/alerts", headers=HEADERS, timeout=10)
-        d = r.json() if r.status_code == 200 else []
+        if r.status_code != 200:
+            return []
+        d = r.json()
+        # /v1/alerts returns {"alerts":[...]} or a plain list
+        if isinstance(d, dict):
+            return d.get("alerts", [])
         return d if isinstance(d, list) else []
     except:
         return []
@@ -559,8 +569,12 @@ if page == "Dashboard":
     req_alltime  = sum(s["all_time"]["requests"]     for s in stats) if stats else 0
     active_now   = sum(s.get("this_minute_requests", 0) for s in stats) if stats else 0
     active_mdls  = sum(1 for s in stats if s["today"]["requests"] > 0) if stats else 0
-    tok_limit    = quota.get("tokens_limit", 0) or 1
-    tok_pct      = min(100, tok_today / tok_limit * 100) if tok_limit else 0
+    # Use quota limit if available; estimate from raw items as fallback
+    _raw_limit = quota.get("tokens_limit", 0)
+    if not _raw_limit and quota.get("raw"):
+        _raw_limit = sum(q.get("tokens", {}).get("limit", 0) for q in quota.get("raw", []))
+    tok_limit = _raw_limit if _raw_limit > 0 else max(tok_today * 10, 500_000)
+    tok_pct   = min(100, tok_today / tok_limit * 100) if tok_limit else 0
 
     groq_models_list = [m for m in models if any(
         p.get("provider", "").lower() == "groq" for p in m.get("providers", [])
@@ -680,6 +694,23 @@ if page == "Dashboard":
 
     quota_by_model = quota.get("model_usage", {})
 
+    # Build a flexible lookup: try exact match, then strip prefix, then partial
+    def _find_quota(model_id: str) -> dict:
+        if not quota_by_model:
+            return {}
+        # exact
+        if model_id in quota_by_model:
+            return quota_by_model[model_id]
+        # strip org prefix e.g. "openai/gpt-oss-120b" → "gpt-oss-120b"
+        short = model_id.split("/")[-1]
+        if short in quota_by_model:
+            return quota_by_model[short]
+        # partial substring match
+        for k, v in quota_by_model.items():
+            if short in k or k in model_id:
+                return v
+        return {}
+
     if stats:
         tbl_rows = []
         for s in stats:
@@ -690,7 +721,7 @@ if page == "Dashboard":
             t_all    = s["all_time"]["total_tokens"]
             r_all    = s["all_time"]["requests"]
             this_min = s.get("this_minute_requests", 0)
-            q        = quota_by_model.get(mid, {})
+            q        = _find_quota(mid)
             remaining = q.get("tokens", {}).get("remaining", 0) if q else 0
             tbl_rows.append({
                 "Model":          mid,
@@ -874,7 +905,28 @@ elif page == "Model Analytics":
 
     st.divider()
 
-    model_usage = quota.get("model_usage", {})
+    model_usage  = quota.get("model_usage", {})
+    # Also pull our independent tracker stats and key by model_id
+    tracker_stats = fetch_model_stats()
+    tracker_by_id = {s["model_id"]: s for s in tracker_stats}
+
+    def _match_usage(canonical, prov_model_id):
+        """Try multiple key forms to find quota usage."""
+        for key in [canonical, prov_model_id, prov_model_id.split("/")[-1], canonical.split("/")[-1]]:
+            if key and key in model_usage:
+                return model_usage[key]
+        # partial match
+        for k, v in model_usage.items():
+            if canonical in k or k in canonical or prov_model_id in k:
+                return v
+        return {}
+
+    def _match_tracker(canonical, prov_model_id):
+        """Try multiple key forms to find tracker stats."""
+        for key in [prov_model_id, canonical, prov_model_id.split("/")[-1], canonical.split("/")[-1]]:
+            if key and key in tracker_by_id:
+                return tracker_by_id[key]
+        return {}
 
     rows = []
     for m in models:
@@ -888,23 +940,20 @@ elif page == "Model Analytics":
         if search_model != "All Models" and mid != search_model:
             continue
 
-        # Match usage by provider_model_id (e.g. "llama-3.1-8b-instant")
-        # since quota is keyed by provider model ID not canonical name
         provider_model_id = prov_list[0].get("provider_model_id", mid) if prov_list else mid
-        usage_entry = (
-            model_usage.get(mid) or
-            model_usage.get(provider_model_id) or
-            {}
-        ) if isinstance(model_usage, dict) else {}
+        usage_entry = _match_usage(mid, provider_model_id)
+        tracker_entry = _match_tracker(mid, provider_model_id)
+
         tok_data  = usage_entry.get("tokens", {})
-        used      = tok_data.get("used", 0)
+        # Prefer our independent tracker for "used" — more accurate
+        used      = tracker_entry.get("today", {}).get("total_tokens", 0) or tok_data.get("used", 0)
         limit     = tok_data.get("limit", 100_000) or 100_000
-        remaining = tok_data.get("remaining", limit - used)
-        pct       = tok_data.get("pct_used", 0.0)
+        remaining = tok_data.get("remaining", max(0, limit - used))
+        pct       = round(used / limit * 100, 1) if limit else 0.0
         req_day   = prov_list[0].get("req_per_day", 0) if prov_list else 0
 
         req_data  = usage_entry.get("requests", {}) if usage_entry else {}
-        req_used  = req_data.get("used", 0)
+        req_used  = tracker_entry.get("today", {}).get("requests", 0) or req_data.get("used", 0)
         req_limit = req_data.get("limit", req_day) or req_day
 
         rows.append({
