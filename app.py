@@ -1,6 +1,6 @@
 """
 Neete AI Gateway — Observability Dashboard
-Industry Standard | Black & Orange
+Langfuse-style | NEETE Brand | Black & Orange
 """
 
 import streamlit as st
@@ -14,8 +14,8 @@ import time
 # PAGE CONFIG
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="Neete AI Gateway | Observability",
-    page_icon="N",
+    page_title="Neete AI Gateway",
+    page_icon="https://img.icons8.com/fluency/48/artificial-intelligence.png",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -25,113 +25,314 @@ GATEWAY_KEY = st.secrets["GATEWAY_KEY"]
 HEADERS     = {"Authorization": f"Bearer {GATEWAY_KEY}", "Content-Type": "application/json"}
 
 # ─────────────────────────────────────────────
-# THEME — Black & Orange
+# GLOBAL CSS — NEETE Design System
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
-    .stApp { background-color: #0A0A0A; color: #FFFFFF; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
-    [data-testid="stSidebar"] {
-        background-color: #0F0F0F;
-        border-right: 1px solid #FF6B00;
-    }
+/* ── Base ── */
+* { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
+.stApp { background-color: #080808 !important; color: #E8E8E8; }
+.main .block-container { padding: 24px 32px 48px !important; max-width: 1400px; }
 
-    [data-testid="metric-container"] {
-        background: #141414;
-        border: 1px solid #2A2A2A;
-        border-radius: 8px;
-        padding: 16px;
-        border-left: 3px solid #FF6B00;
-    }
-    [data-testid="stMetricValue"] {
-        color: #FF6B00 !important;
-        font-size: 1.8rem !important;
-        font-weight: 700 !important;
-    }
-    [data-testid="stMetricLabel"] {
-        color: #888888 !important;
-        font-size: 0.78rem !important;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {
+    background: #0C0C0C !important;
+    border-right: 1px solid #1E1E1E !important;
+    padding-top: 0 !important;
+}
+[data-testid="stSidebar"] > div:first-child { padding-top: 0 !important; }
+[data-testid="stSidebarNav"] { display: none; }
 
-    h1, h2, h3, h4 { color: #FFFFFF !important; font-weight: 600 !important; }
-    p, span, label { color: #CCCCCC; }
-    hr { border-color: #222222 !important; }
+/* ── Sidebar logo strip ── */
+.neete-logo-strip {
+    background: linear-gradient(135deg, #0F0F0F 0%, #141414 100%);
+    border-bottom: 1px solid #1E1E1E;
+    padding: 20px 20px 16px;
+    margin-bottom: 4px;
+}
+.neete-wordmark {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.neete-monogram {
+    width: 36px; height: 36px;
+    background: #FF6B00;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; font-weight: 900; color: #000;
+    letter-spacing: -0.02em;
+    flex-shrink: 0;
+}
+.neete-brand-text { line-height: 1; }
+.neete-brand-name {
+    font-size: 1.05rem; font-weight: 800;
+    color: #FFFFFF; letter-spacing: 0.06em;
+}
+.neete-brand-sub {
+    font-size: 0.6rem; font-weight: 500;
+    color: #444; letter-spacing: 0.14em;
+    text-transform: uppercase; margin-top: 2px;
+}
 
-    .stat-card {
-        background: #141414;
-        border: 1px solid #2A2A2A;
-        border-left: 3px solid #FF6B00;
-        border-radius: 8px;
-        padding: 16px 20px;
-        margin: 4px 0;
-    }
-    .stat-label {
-        color: #888;
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin: 0;
-    }
-    .stat-value {
-        color: #FF6B00;
-        font-size: 1.6rem;
-        font-weight: 700;
-        margin: 4px 0 0 0;
-    }
+/* ── Nav items ── */
+.nav-item {
+    display: block;
+    padding: 9px 16px;
+    margin: 2px 10px;
+    border-radius: 7px;
+    color: #666 !important;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.15s ease;
+    letter-spacing: 0.01em;
+}
+.nav-item:hover { background: #161616; color: #CCC !important; }
+.nav-item.active {
+    background: #1A0D00;
+    color: #FF6B00 !important;
+    font-weight: 600;
+    border-left: 3px solid #FF6B00;
+    padding-left: 13px;
+}
+.nav-section-label {
+    padding: 12px 20px 4px;
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: #333;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
 
-    .status-live   { color: #00C853; font-weight: 600; font-size: 0.8rem; }
-    .status-down   { color: #FF3D00; font-weight: 600; font-size: 0.8rem; }
-    .status-warn   { color: #FF6B00; font-weight: 600; font-size: 0.8rem; }
+/* ── Metrics ── */
+[data-testid="metric-container"] {
+    background: #111111 !important;
+    border: 1px solid #1E1E1E !important;
+    border-top: 2px solid #FF6B00 !important;
+    border-radius: 10px !important;
+    padding: 18px 20px !important;
+    transition: border-color 0.2s;
+}
+[data-testid="metric-container"]:hover { border-color: #FF8C00 !important; }
+[data-testid="stMetricValue"] {
+    color: #FFFFFF !important;
+    font-size: 1.7rem !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.02em !important;
+}
+[data-testid="stMetricLabel"] {
+    color: #555 !important;
+    font-size: 0.72rem !important;
+    font-weight: 500 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.07em !important;
+}
+[data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
 
-    .tag-groq { background:#1A1000; color:#FF6B00; border:1px solid #FF6B00;
-                padding:2px 8px; border-radius:4px; font-size:0.7rem; font-weight:600; }
-    .tag-nim  { background:#001A10; color:#00C853; border:1px solid #00C853;
-                padding:2px 8px; border-radius:4px; font-size:0.7rem; font-weight:600; }
+/* ── Section headers ── */
+.section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 0 0 12px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #1A1A1A;
+}
 
-    .stButton > button {
-        background: #FF6B00 !important;
-        color: #000 !important;
-        border: none !important;
-        border-radius: 6px !important;
-        font-weight: 700 !important;
-        font-size: 0.82rem !important;
-        letter-spacing: 0.04em;
-    }
-    .stButton > button:hover { background: #FF8C00 !important; }
+/* ── Cards ── */
+.card {
+    background: #111111;
+    border: 1px solid #1E1E1E;
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 12px;
+}
+.card-accent { border-left: 3px solid #FF6B00; }
+.card-green  { border-left: 3px solid #00C853; }
+.card-red    { border-left: 3px solid #FF3D00; }
 
-    [data-testid="stDataFrame"] { border: 1px solid #222; border-radius: 8px; }
-    .stSelectbox > div > div { background: #141414 !important; border-color: #333 !important; }
+.stat-card { background:#111; border:1px solid #1E1E1E; border-left:3px solid #FF6B00;
+             border-radius:10px; padding:16px 18px; margin:5px 0; }
+.stat-label { color:#444; font-size:0.68rem; text-transform:uppercase;
+              letter-spacing:0.1em; margin:0; font-weight:600; }
+.stat-value { color:#FF6B00; font-size:1.5rem; font-weight:700; margin:6px 0 0 0; }
+
+/* ── Status badges ── */
+.badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
+.badge-live  { background: #0A2A14; color: #00C853; border: 1px solid #00C853; }
+.badge-down  { background: #2A0A0A; color: #FF3D00; border: 1px solid #FF3D00; }
+.badge-warn  { background: #2A1A00; color: #FF6B00; border: 1px solid #FF6B00; }
+.badge-groq  { background: #1A0D00; color: #FF6B00; border: 1px solid #FF6B00; }
+.badge-nim   { background: #001A0A; color: #00C853; border: 1px solid #00C853; }
+
+.status-live { color: #00C853; font-weight: 600; font-size: 0.78rem; }
+.status-down { color: #FF3D00; font-weight: 600; font-size: 0.78rem; }
+.status-warn { color: #FF6B00; font-weight: 600; font-size: 0.78rem; }
+
+/* ── Divider ── */
+hr { border: none !important; border-top: 1px solid #161616 !important; margin: 20px 0 !important; }
+
+/* ── Buttons ── */
+.stButton > button {
+    background: #FF6B00 !important;
+    color: #000 !important;
+    border: none !important;
+    border-radius: 7px !important;
+    font-weight: 700 !important;
+    font-size: 0.8rem !important;
+    letter-spacing: 0.04em !important;
+    padding: 8px 18px !important;
+    transition: background 0.15s !important;
+}
+.stButton > button:hover { background: #FF8534 !important; }
+
+/* ── Dataframe ── */
+[data-testid="stDataFrame"] {
+    border: 1px solid #1E1E1E !important;
+    border-radius: 10px !important;
+    overflow: hidden !important;
+}
+.stDataFrame thead tr th {
+    background: #111 !important;
+    color: #555 !important;
+    font-size: 0.7rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    border-bottom: 1px solid #1E1E1E !important;
+}
+
+/* ── Inputs ── */
+.stTextInput > div > div, .stTextArea > div > div {
+    background: #111 !important;
+    border-color: #222 !important;
+    border-radius: 7px !important;
+    color: #DDD !important;
+}
+.stSelectbox > div > div {
+    background: #111 !important;
+    border-color: #222 !important;
+    border-radius: 7px !important;
+}
+.stSlider > div { padding: 4px 0 !important; }
+.stNumberInput > div > div { background: #111 !important; border-color: #222 !important; }
+
+/* ── Radio (nav) ── */
+[data-testid="stRadio"] label {
+    font-size: 0.82rem !important;
+    color: #555 !important;
+    padding: 6px 10px !important;
+}
+[data-testid="stRadio"] label:hover { color: #CCC !important; }
+
+/* ── Toggle ── */
+[data-testid="stToggle"] { margin: 4px 0 !important; }
+
+/* ── Chat message boxes ── */
+.chat-user {
+    background: #141414; border: 1px solid #222;
+    border-left: 3px solid #444; border-radius: 8px;
+    padding: 12px 16px; margin: 8px 0;
+}
+.chat-assistant {
+    background: #0F0F0F; border: 1px solid #1E1E1E;
+    border-left: 3px solid #FF6B00; border-radius: 8px;
+    padding: 12px 16px; margin: 8px 0;
+}
+.chat-role {
+    font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; margin-bottom: 8px;
+}
+.chat-content { font-size: 0.87rem; line-height: 1.65; white-space: pre-wrap; }
+
+/* ── Page title ── */
+.page-header {
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #161616;
+}
+.page-title {
+    font-size: 1.35rem; font-weight: 700; color: #FFF;
+    letter-spacing: -0.01em; margin: 0;
+}
+.page-subtitle {
+    font-size: 0.78rem; color: #444; margin-top: 4px;
+}
+
+/* ── Spinner ── */
+[data-testid="stSpinner"] { color: #FF6B00 !important; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #0C0C0C; }
+::-webkit-scrollbar-thumb { background: #2A2A2A; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #FF6B00; }
+
+/* ── Alert/info boxes ── */
+[data-testid="stAlert"] { border-radius: 8px !important; border-left-width: 3px !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
-# AUTH
+# AUTH — NEETE branded login
 # ─────────────────────────────────────────────
 def check_auth():
     if not st.session_state.get("authenticated"):
-        col1, col2, col3 = st.columns([1, 1.5, 1])
-        with col2:
-            st.markdown("""
-            <div style='text-align:center; padding:60px 0 30px;'>
-                <div style='font-size:2.5rem; font-weight:800; letter-spacing:0.1em;'>
-                    <span style='color:#FF6B00;'>NEETE</span>
-                </div>
-                <div style='color:#555; font-size:0.85rem; margin-top:4px; letter-spacing:0.15em;'>
-                    AI GATEWAY OBSERVABILITY
+        st.markdown("""
+        <style>
+        .stApp { background: #080808 !important; }
+        .main .block-container { max-width: 420px !important; padding-top: 80px !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        st.markdown("""
+        <div style='text-align:center; margin-bottom:40px;'>
+            <div style='display:inline-flex; align-items:center; gap:14px; margin-bottom:16px;'>
+                <div style='
+                    width:52px; height:52px;
+                    background:#FF6B00; border-radius:14px;
+                    display:flex; align-items:center; justify-content:center;
+                    font-size:1.5rem; font-weight:900; color:#000;
+                    box-shadow:0 0 30px rgba(255,107,0,0.3);
+                '>N</div>
+                <div style='text-align:left;'>
+                    <div style='font-size:1.4rem; font-weight:800; color:#FFF; letter-spacing:0.08em;'>NEETE</div>
+                    <div style='font-size:0.62rem; color:#444; letter-spacing:0.18em; text-transform:uppercase;'>AI Gateway Platform</div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
-            with st.form("login"):
-                pwd = st.text_input("Password", type="password", placeholder="Enter access password")
-                if st.form_submit_button("Access Dashboard", use_container_width=True):
-                    if pwd == st.secrets["DASHBOARD_PASSWORD"]:
-                        st.session_state.authenticated = True
-                        st.rerun()
-                    else:
-                        st.error("Invalid password")
+            <div style='color:#333; font-size:0.78rem;'>Neete IT Division — Internal Access Only</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.form("login_form"):
+            st.markdown("<p style='color:#555; font-size:0.78rem; margin-bottom:6px; font-weight:600; letter-spacing:0.05em;'>ACCESS PASSWORD</p>", unsafe_allow_html=True)
+            pwd = st.text_input("", type="password", placeholder="Enter your password", label_visibility="collapsed")
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            if st.form_submit_button("Sign In", use_container_width=True):
+                if pwd == st.secrets["DASHBOARD_PASSWORD"]:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password. Contact Neete IT Division.")
+
+        st.markdown("""
+        <div style='text-align:center; margin-top:32px; color:#222; font-size:0.68rem;'>
+            Neete IT Division &nbsp;·&nbsp; Funcool Manufacturing
+        </div>
+        """, unsafe_allow_html=True)
         st.stop()
 
 check_auth()
@@ -264,25 +465,33 @@ def auto_refresh(seconds: int = 30):
 
 
 # ─────────────────────────────────────────────
-# SIDEBAR
+# SIDEBAR — NEETE branded
 # ─────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("""
-    <div style='padding:20px 0 10px;'>
-        <div style='font-size:1.4rem; font-weight:800; color:#FF6B00; letter-spacing:0.08em;'>NEETE</div>
-        <div style='font-size:0.65rem; color:#444; letter-spacing:0.12em;'>AI GATEWAY OBSERVABILITY</div>
+    # ── Logo strip ────────────────────────────
+    is_live = fetch_health()
+    st.markdown(f"""
+    <div class='neete-logo-strip'>
+        <div class='neete-wordmark'>
+            <div class='neete-monogram'>N</div>
+            <div class='neete-brand-text'>
+                <div class='neete-brand-name'>NEETE</div>
+                <div class='neete-brand-sub'>AI Gateway Platform</div>
+            </div>
+        </div>
+        <div style='margin-top:12px; display:flex; align-items:center; justify-content:space-between;'>
+            <span class='badge {'badge-live' if is_live else 'badge-down'}'>
+                {'● LIVE' if is_live else '● DOWN'}
+            </span>
+            <span style='color:#2A2A2A; font-size:0.68rem;'>
+                {datetime.now().strftime('%d %b, %I:%M %p')}
+            </span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
-    st.divider()
 
-    is_live = fetch_health()
-    st.markdown(
-        f"<span class='{'status-live' if is_live else 'status-down'}'>{'● LIVE' if is_live else '● DOWN'}</span>",
-        unsafe_allow_html=True
-    )
-    st.caption(datetime.now().strftime("%d %b %Y, %I:%M %p IST"))
-    st.divider()
-
+    # ── Navigation ────────────────────────────
+    st.markdown("<div class='nav-section-label'>OBSERVE</div>", unsafe_allow_html=True)
     page = st.radio("", [
         "Dashboard",
         "Model Analytics",
@@ -291,7 +500,8 @@ with st.sidebar:
         "Test LLM",
     ], label_visibility="collapsed")
 
-    st.divider()
+    # ── Actions ───────────────────────────────
+    st.markdown("<div class='nav-section-label'>ACTIONS</div>", unsafe_allow_html=True)
     if st.button("Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -300,9 +510,17 @@ with st.sidebar:
     if auto:
         auto_refresh(30)
 
+    # ── Footer ────────────────────────────────
     st.markdown("""
-    <div style='position:fixed;bottom:16px;left:0;right:0;text-align:center;'>
-        <span style='color:#333;font-size:0.65rem;'>Neete IT Division</span>
+    <div style='position:fixed; bottom:0; left:0; width:260px;
+                background:#0C0C0C; border-top:1px solid #161616;
+                padding:12px 20px;'>
+        <div style='font-size:0.65rem; color:#2A2A2A; font-weight:500;'>
+            Neete IT Division &nbsp;·&nbsp; Funcool
+        </div>
+        <div style='font-size:0.6rem; color:#1E1E1E; margin-top:2px;'>
+            Powered by Groq + NVIDIA NIM
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -335,24 +553,24 @@ if page == "Dashboard":
     )]
     nim_models_list  = [m for m in models if m not in groq_models_list]
 
-    # ── Header ────────────────────────────────────────────────────
-    hcol1, hcol2 = st.columns([3, 1])
-    with hcol1:
-        st.markdown("## Neete AI Gateway — Dashboard")
-        st.caption(
-            f"Last refreshed: {datetime.now().strftime('%d %b %Y, %I:%M:%S %p IST')}  |  "
-            f"Gateway: {'LIVE' if is_live else 'DOWN'}  |  "
-            f"Groq: {len(groq_models_list)} models  |  NIM: {len(nim_models_list)} models"
-        )
-    with hcol2:
-        st.markdown(
-            f"<div style='text-align:right; padding-top:10px;'>"
-            f"<span class='{'status-live' if is_live else 'status-down'}'>"
-            f"{'● GATEWAY LIVE' if is_live else '● GATEWAY DOWN'}</span></div>",
-            unsafe_allow_html=True,
-        )
-
-    st.divider()
+    # ── Page header ───────────────────────────────────────────────
+    st.markdown(f"""
+    <div class='page-header'>
+        <div style='display:flex; align-items:center; justify-content:space-between;'>
+            <div>
+                <p class='page-title'>Dashboard</p>
+                <p class='page-subtitle'>
+                    {datetime.now().strftime('%d %b %Y, %I:%M:%S %p IST')}
+                    &nbsp;·&nbsp; Groq: {len(groq_models_list)} models
+                    &nbsp;·&nbsp; NIM: {len(nim_models_list)} models
+                </p>
+            </div>
+            <span class='badge {'badge-live' if is_live else 'badge-down'}'>
+                {'● GATEWAY LIVE' if is_live else '● GATEWAY DOWN'}
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ── KPI Row ───────────────────────────────────────────────────
     k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -369,7 +587,7 @@ if page == "Dashboard":
     r1a, r1b, r1c = st.columns([2, 2, 1])
 
     with r1a:
-        st.markdown("##### Daily Quota Usage")
+        st.markdown("<p class='section-title'>Daily Quota Usage</p>", unsafe_allow_html=True)
         color_g = "#00C853" if tok_pct < 60 else "#FF6B00" if tok_pct < 85 else "#FF3D00"
         fig_g = go.Figure(go.Indicator(
             mode="gauge+number+delta",
@@ -399,7 +617,7 @@ if page == "Dashboard":
         gc.metric("Limit",     f"{tok_limit:,}")
 
     with r1b:
-        st.markdown("##### Provider Split — Models")
+        st.markdown("<p class='section-title'>Provider Split — Models</p>", unsafe_allow_html=True)
         fig_p = go.Figure(go.Pie(
             labels=["Groq", "NVIDIA NIM"],
             values=[len(groq_models_list), len(nim_models_list)],
@@ -421,7 +639,7 @@ if page == "Dashboard":
         st.plotly_chart(fig_p, use_container_width=True)
 
     with r1c:
-        st.markdown("##### Key Pool")
+        st.markdown("<p class='section-title'>Key Pool</p>", unsafe_allow_html=True)
         active_keys    = [k for k in keys if isinstance(k, dict) and not k.get("is_exhausted") and k.get("is_active")]
         exhausted_keys = [k for k in keys if isinstance(k, dict) and k.get("is_exhausted")]
         st.markdown(
@@ -444,7 +662,7 @@ if page == "Dashboard":
     st.divider()
 
     # ── Row 2: Per-model usage table ──────────────────────────────
-    st.markdown("##### Model Usage — Today vs All Time")
+    st.markdown("<p class='section-title'>Model Usage — Today vs All Time</p>", unsafe_allow_html=True)
 
     quota_by_model = quota.get("model_usage", {})
 
@@ -507,7 +725,7 @@ if page == "Dashboard":
     ch1, ch2 = st.columns(2)
 
     with ch1:
-        st.markdown("##### Tokens Used Today — By Model")
+        st.markdown("<p class='section-title'>Tokens Used Today — By Model</p>", unsafe_allow_html=True)
         chart_today = [s for s in stats if s["today"]["total_tokens"] > 0] if stats else []
         if chart_today:
             chart_today.sort(key=lambda x: -x["today"]["total_tokens"])
@@ -530,7 +748,7 @@ if page == "Dashboard":
             st.caption("No token usage recorded today yet.")
 
     with ch2:
-        st.markdown("##### All-Time Token Usage — Since Day One")
+        st.markdown("<p class='section-title'>All-Time Token Usage — Since Day One</p>", unsafe_allow_html=True)
         if stats:
             chart_all = sorted(stats, key=lambda x: -x["all_time"]["total_tokens"])
             fig_al = go.Figure(go.Bar(
@@ -557,7 +775,7 @@ if page == "Dashboard":
     live_col, alert_col = st.columns([1, 1])
 
     with live_col:
-        st.markdown("##### Live — Requests This Minute")
+        st.markdown("<p class='section-title'>Live — Requests This Minute</p>", unsafe_allow_html=True)
         active_right_now = [(s["model_id"], s.get("this_minute_requests", 0))
                             for s in stats if s.get("this_minute_requests", 0) > 0] if stats else []
         if active_right_now:
@@ -579,7 +797,7 @@ if page == "Dashboard":
             )
 
     with alert_col:
-        st.markdown("##### Recent Alerts")
+        st.markdown("<p class='section-title'>Recent Alerts</p>", unsafe_allow_html=True)
         recent_alerts = alerts[:5] if alerts else []
         if recent_alerts:
             for a in recent_alerts:
